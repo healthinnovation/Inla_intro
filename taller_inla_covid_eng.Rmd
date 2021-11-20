@@ -1,0 +1,653 @@
+---
+title: "Taller INLA covid"
+output: 
+  html_document:
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    code_folding: hide
+    css: theme.css
+    includes: 
+      in_header: hero-image.html
+      
+        
+---
+
+
+
+
+```{r,message=F,warning=F,echo=F,eval=F}
+#breezedark
+library(tidyverse)
+datos<-readRDS("excess_mortality_Complete.Rdata")                          %>% 
+       filter(annus %in% c(2017,2018,2019))                                %>% 
+       group_by(reg,prov,annus,week)                                  %>% 
+       summarise(n=sum(n))                                                 %>% 
+       mutate(date = as.Date(paste(annus, week, 1, sep="-"), "%Y-%U-%u")) %>% 
+       filter(week != 53)
+
+
+db.climate<-readRDS("db_climate.rds") 
+
+db.final<-datos %>% 
+          mutate(year=as.integer(annus)) %>% 
+          inner_join(db.climate,c("reg"="reg","prov"="prov",
+                                  "year"="year","week"="week"))
+
+
+
+
+saveRDS(db.final,"db_excess_proc.rds")
+```
+
+
+
+
+# Predictive analysis 
+
+Predictive analysis uses historical data to predict future events. Typically, historical data is used to create a model that captures various temporal patterns. This predictive model is then used with current data to predict what will happen. There are various methodologies to carry out predictions, in this workshop we opted for the Bayesian approach to carry it out
+
+
+
+## Bayesian approach: Predictive posterior distribution
+
+
+The Bayesian approach, in the context of predictive analysis, focuses its analysis on the calculation of the  *posterior predictive distribution*. This distribution uses the information in the data as well as the posterior distribution of the parameters of interest. Using these inputs the predictive distribution can generate future data; that is, missing data in a determining horizon. 
+
+\begin{align*}
+f(y_{pred}|y_{obs}) = \int_{\theta} f(y_{pred},\theta|y_{obs})d\theta =\int_{\theta} f(y_{pred}| \theta y_{obs})f(\theta|y_{obs})d\theta 
+\end{align*}
+
+## INLA
+
+Currently there are various methodologies to carry out the numerical calculation of this distribution which in **R** correspond to the use of a certain package. Some widely known packages are as follows:
+
+* STAN
+* Winbugs
+* Jags
+
+Relatively not long ago the methodology of the **Laplace Integrated Nested Approach** or [**INLA**](https://www.r-inla.org/) (for its acronym in English) has gained importance for its relative efficiency to estimate complex models.
+
+## Prediccion como datos faltantes
+
+Prediction analysis in practice can be understood as predicting unknown data in a certain horizon. In this sense, these future data can be interpreted as missing data or missings values, which are the object of the prediction.
+
+
+|Year  | week     |Number of deaths    |
+|:----:|:--------:|:------------------:|
+|2019  |    1     |       0            |
+|2019  |    2     |       1            |
+|2019  |    3     |       4            |
+|2020  |    1     |       0            |
+|2020  |    2     |       1            |
+|2020  |    3     |       4            |
+|2021  |    1     |       NA           |
+|2021  |    2     |       NA           |
+|2021  |    3     |       NA           |
+
+
+To carry out predictions using **INLA**, an approximation is exactly the previous one. Once the data are arranged as in the previous table, it is enough to fit a typical model in **INLA**, since it will internally calculate the *posterior predictive distribution*.
+
+
+
+
+
+
+# Descriptive analysis
+
+```{r,message=F,warning=F,fig.align="center",fig.width=20,fig.height=10}
+
+library(kableExtra)
+library(tidyverse)
+library(INLA)
+library(yardstick)
+library(gt)
+library(innovar)
+library(spdep)
+library(reshape2)
+
+db       <- readRDS("db_excess_proc.rds")
+db.lima <- db %>% 
+            filter(prov=="LIMA")
+
+
+db.lima %>% 
+ggplot()+
+geom_line(aes(x=date,y=n),color="#011f4b",lwd=1.5)+
+geom_point(aes(x=date,y=n),color="black",lwd=2.5)+
+ylab("Numero de muertes")+
+xlab("")+
+ggtitle("Evolution of the number of deaths")+
+theme_bw()+
+theme(plot.title = element_text(hjust = 0.5,size = 35),
+      strip.background =element_rect(fill="#011f4b"),
+      strip.text = element_text(color = "white",face = "bold",size = "5pts")) 
+```
+
+
+## Modeling with INLA 
+
+To carry out the adjustment of models we use the `inla()` function, which has several parameters, some of the most important are :
+
+
+* `data`    : An object typically of the class `data.frame`, data to adjust any model.
+
+* `formula` : Un objeto de la clase formula que especifica la ecuacion que pretendemos ajustar como por ejemplo `inla(target ~ 1 + x1)`. En la formula podemos especificar  efectos lineales (introduciendo el nombre de la `variable`) o no lineales (empleando `f()`). 
+
+* `verbose` : A variable of the type `boolean`, which indicates if you want to show the convergence process in the console
+
+
+
+
+```{r,message=F,warning=F}
+
+lima.m.m0 <- inla(n ~ 1 + annus,
+                  verbose         = F,
+                  data            =  db.lima
+                  )
+
+```
+
+The parameters detailed above are the essential ones to execute the adjustment of a model using `INLA`. However, some extra parameters to consider are the following:
+
+*  `family`: Class object `character`. This parameter is crucial, as it determines the distribution of the target variable, by default it is in` family = Gaussian`. 
+* `control.compute`:Object of class `list` allows to specify the calculation of information criteria such as` aic`, `dic`,` waic`.
+
+
+
+```{r,message=F,warning=F}
+
+lima.m.m1 <- inla(n ~ 1 + annus,
+                  verbose           = F,
+                  data              =  db.lima,
+                  control.compute   = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  )
+
+```
+
+
+## fit and Predict: Temporal Approach
+
+In forecast analysis, data in the format of *time series* is typically used to carry it out. For this, it is commonly assumed that the time series can be decomposed as follows:
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+e_{t}
+\end{align*} 
+
+donde :\
+$S_{t}$ : Seasonality \
+$T_{t}$ : Trend      \
+$e_{t}$ : white noise   \
+
+
+### Adjustment and prediction{.tabset}
+
+The components detailed above can be modeled in the context of INLA using a priori distributions for each component such as the following: \
+
+* linear                                   :  `variable`\
+* AR1 (1st order autoregressive process) : `f(variable, model = "ar1")` \
+* RW1 (1st order random walk)       : `f(variable, model = "rw1")` \
+* RW2 (2nd order random walk)       : `f(variable, model = "rw2")` \
+
+Given the behavior exhibited by the series that we intend to model, for the components:\
+
+* Trend       : We will use a prior distribution of the autoregressive (AR 1) or linear type
+* Seasonality : We will use a random walk type a priori distribution of 1st or 2nd order 
+
+
+Taking into account these brief suggestions, we proceed to adjust models for this, firstly, we establish as missing data the period we wish to predict in this case **2019**.
+
+```{r,message=F,warning=F}
+
+db             <- db                                   %>%  
+                  mutate(n=ifelse(annus == 2019 & prov=="LIMA" ,NA,n))
+
+
+
+
+db.n           <- db.lima                            %>%  
+                  mutate(n=ifelse(annus == 2019,NA,n))  
+
+
+
+```
+
+Subsequently, again we use the `inla ()` function with all the complementary parameters that we detail. However, an important point to consider is that the process we model is a *counting process* therefore the assumption regarding the distribution that we will use will be that of a negative binomial `family =" nbinomial "`. It is worth mentioning that we can see the complete list of possible distributions for the response variable using: `inla.list.models (" likelihood ")`
+
+```{r,message=F,warning=F}
+
+# Assuming an a priori Distribution for the years: "ar1"
+
+lima.m.m1 <- inla(n ~ 1 + temperature + f(annus,model = "ar1"),
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db.n
+                  )
+# Assuming an a priori Distribution for the weeks: "rw1"
+lima.m.m2 <- inla(n ~ 1 + temperature+ f(week,model = "rw1"),
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db.n
+                  )
+# both priors at same time 
+lima.m.m3 <- inla(n ~ 1 + temperature + f(annus,model = "ar1") + f(week,model = "rw1"),
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db.n
+                  )
+
+
+
+
+```
+
+
+Once the model is fitted , we can see the behavior of the variables considered, so to obtain a summary of the behavior of the linear variables we can use `InlaObject$summary.fixed` while for the non-linear  `InlaObject$summary.fixed`.Finally, we use `kbl()` from the `kable` package together with `kable_styling()` from the` kableExtra` package to stylize the result.
+
+
+```{r,message=F,warning=F}
+lima.m.m1$summary.fixed  %>% kbl() %>%
+  kable_styling()
+
+lima.m.m2$summary.fixed  %>% kbl() %>%
+  kable_styling()
+
+lima.m.m3$summary.fixed  %>% kbl() %>%
+  kable_styling()
+
+```
+
+```{r,message=F,warning=F}
+
+#one non-linear effect
+
+lima.m.m1$summary.random %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+
+lima.m.m2$summary.random %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+ 
+# two or more  non-linear effects
+
+lima.m.m3$summary.random$annus  %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+
+
+lima.m.m3$summary.random$week  %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+
+
+```
+
+
+
+In addition, once the models are adjusted, we can collect relevant information about their adjustment. In this sense, the object generated by the `inla()` function is a *list* that contains all the results which correspond to the options (`parameters`) used during the execution of `inla()`. In this case we use `InlaObject$summary.fitted.values` to collect information about the adjusted values.
+
+```{r,message=F,warning=F}
+fit.m.m1 <- lima.m.m1$summary.fitted.values$mean
+fit.m.m2 <- lima.m.m2$summary.fitted.values$mean
+fit.m.m3 <- lima.m.m3$summary.fitted.values$mean
+n.m      <- db.lima$n
+
+```
+
+Likewise, we proceed to assign all the information of the fitted values of the models to a list object. Later we use `melt` to create a database structure of the`long` type suitable for graphing. Thus, we collect information on the credibility intervals of the adjusted values using: `lima.m.m1$summary.fitted.values$ 0.025 quant` and `lima.m.m1$summary.fitted.values$0.975quant`.
+
+
+```{r,message=F,warning=F}
+
+datos  <-  list("AR(1)"=fit.m.m1,"RW(1)"=fit.m.m2,"AR(1)RW(1)"=fit.m.m3) %>% 
+           as.data.frame() %>% 
+           melt( variable.name = "modelo",
+                value.name    = "fit") %>% 
+           group_by(modelo) %>% 
+           mutate(actual    = n.m,
+                  date      = db.n$date) %>% 
+           ungroup() %>% 
+           mutate(min_inter = c(lima.m.m1$summary.fitted.values$`0.025quant`,
+                                lima.m.m2$summary.fitted.values$`0.025quant`,
+                                lima.m.m3$summary.fitted.values$`0.025quant`),
+                                
+                                
+                  max_inter = c(lima.m.m1$summary.fitted.values$`0.975quant`,
+                                lima.m.m2$summary.fitted.values$`0.975quant`,
+                                lima.m.m3$summary.fitted.values$`0.975quant`)  
+           )
+
+```
+
+Subsequently, we graph the data as well as the fit of the proposed models with their respective credibility interval using the `ggplot()` function of the `ggplot2` package.
+
+```{r,message=F,warning=F,fig.height=20,fig.width=50}
+
+datos %>% 
+ggplot()                        +
+geom_line(aes(x=date,y=actual),lwd=1.5) +
+geom_line(aes(x=date,y=fit),lwd=1.5,color="#011f4b",linetype = "dashed")    +
+geom_ribbon(aes(x=date,y=fit,ymin=min_inter, ymax=max_inter), 
+                alpha=0.2,       #transparency
+                fill="#011f4b",
+                color="#011f4b",lwd=1.5) +
+facet_wrap(vars(modelo))        +
+theme_bw()+
+xlab(" ") +
+ylab("Numero de casos")+
+geom_vline(xintercept = as.Date("2019-01-07"), linetype="dotted", 
+                color = "black", size=3)+
+theme(plot.title = element_text(hjust = 0.5,size = "20pts"),
+      strip.background =element_rect(fill="#011f4b"),
+      strip.text = element_text(color = "white",face = "bold",size = "35")) 
+
+
+```
+
+
+
+### Performance{.tabset}
+
+For the calculation of metrics in the search to evaluate the proposed models we will use the package [`yardstick`](https://yardstick.tidymodels.org/). In particular, we use the `metric_set` function to select the metrics we want to calculate (`mae`,`mape`,`mpe`,`rmse`,`msd`). We group the data for each model to perform the calculation at that level, we filter by the year of analysis of the prediction **2019** and finally we use the function `perform.metrics`, for which we detail the parameters` truth` and `estimate` that collect the true and adjusted data, respectively.
+
+```{r,message=F,warning=F,fig.width=20,fig.height=10}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mape,mpe,rmse,msd)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.m <- datos                    %>% 
+             filter(date>=as.Date("2019-01-07")) %>% 
+             group_by(modelo)         %>%
+             perform.metrics(truth    = actual, 
+                           estimate = fit)
+
+
+```
+
+Finally, the resulting object has a `long` type structure, so for the purposes of reporting these results in a table. In the first place the `data.frame` structure is converted to` wide` using the `pivot_wider` function which collects as new column names (` names_from`) the levels of the `.metric` variable and these in turn are filled with the values (`values_from`) from` .estimate`. Finally, we use the `gt()` function from the `gt` package to report a custom table.
+
+```{r,message=F,warning=F}
+
+# Results table
+tbl.yrd.m                               %>% 
+pivot_wider(id_cols     = modelo,
+            names_from  = .metric,
+            values_from = .estimate)    %>%         
+gt()                                    %>%
+tab_header(
+    title = md("out-of-sample accuracy metrics")#,
+    #subtitle   ="out-of-sample accuracy metrics"
+    ) %>% 
+data_color(
+    columns = vars(mae,mape,mpe,rmse,msd),
+    colors = scales::col_numeric(
+      palette = c(
+        "#011f4b","white"),
+      domain = NULL)
+  ) %>% tab_footnote(
+    footnote = "mae = mean absolute error",
+    locations = cells_column_labels(columns = mae)
+  ) %>%  tab_footnote(
+    footnote = "mape = Mean absolute percent error",
+    locations = cells_column_labels(columns = mape))%>%  
+    tab_footnote(
+    footnote = "mpe = Mean percentage error",
+    locations = cells_column_labels(columns = mpe))%>%  
+    tab_footnote(
+    footnote = "rsme = Root square mean error",
+    locations = cells_column_labels(columns = rmse))%>%  
+    tab_footnote(
+    footnote = "msd = Mean signed deviation",
+    locations = cells_column_labels(columns = msd))
+  
+
+```
+
+Of the temporal structures, the best model in terms of out-of-sample prediction (*forecasting out-of-sample*) was the model that assumes a random walk of order 1 for said structure `rw1`.
+
+
+##  fit and Predict: Spacio-Temporal Approach
+
+The spatio-temporal approach implies complementing the previous approach, making the model more complex, taking into account the spatial dimension. For this we need to include spatial random effects to control for such analysis dimension. It is worth mentioning that **areal** spatial models using INLA, necessarily require the creation of a *graph* or a spatial data structure that captures the arrangement of the areas as a matrix of spatial weights.
+
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+\nu_{t}+u_{t}+e_{t}
+\end{align*} 
+
+donde:\
+
+$\nu_{t}$ :  structured effects  \
+
+$u_{t}$   :  unstructured effects \
+
+The 2 new components $\nu_ {t},u_{t}$ are intended to take into account in the prediction the **spatial correlation** present in the data. About :
+
+* The unstructured effects correspond to random effects that attempt to control unobserved characteristics of **each area** under study. To model them we can use `f (area, model =" iid ")`
+
+* Structured effects are random effects that explicitly take spatial structure into account. They can be modeled in INLA in various ways::
+    - Using besag spatial effects            :`f(area, model = "besag")`         
+    - Using proper besag spatial effects     :`f(area, model = "besagproper")` 
+
+### Preprocessing spatial structure
+
+Given the above, we collect the geographic information of Peru expressed in a `shapefile`, at the provincial level. For which, in addition to calling the shapefile, by grouping the data at the provincial level and using the `summarize` function, seeking to condense the polygons of the shapefile to the desired level
+
+
+```{r,warning=F,message=F}
+
+data("Peru")
+
+peru.prov<-Peru               %>% 
+           group_by(reg,prov) %>% 
+           summarise()
+
+```
+
+Subsequently, we create a neighborhood structure from the shapefile, and in turn, from said neighborhood structure, we create the spatial weight matrix
+
+```{r,warning=F,message=F}
+# Creando la estructura de vecinos mas cercanos
+peru.adj    <- poly2nb(peru.prov)
+# Pesos espaciales
+W.peru <- nb2mat(peru.adj, style = "W") 
+
+```
+
+Finally, we carry out the cleaning of non-existent provinces; as well as the creation of an id for each province, in order to identify each polygon. The latter represents an extra requirement to fit spatial models in `INLA`
+
+```{r,warning=F,message=F}
+
+db.m.sp<- db                             %>% 
+          group_by(prov)                             %>% 
+          filter(!prov %in% c("EXTRANJERO","ARICA")) %>% 
+          mutate(id.sp=cur_group_id())
+
+        
+```
+
+
+### Adjustment and prediction{.tabset}
+
+We adjust the model, following the steps indicated above
+
+```{r,message=F,warning=F}
+
+peru.m.m5   <- inla(n ~ 1 + f(annus,model = "linear") + 
+                            f(week,model="rw1")       +
+                            f(id.sp, model = "besag", 
+                            graph=W.peru)+
+                            temperature, 
+                   data              = db.m.sp,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1)
+                  )
+
+
+
+```
+
+
+Now we can see the behavior of our control variables
+
+```{r,message=F,warning=F}
+peru.m.m5$summary.fixed %>% kbl() %>%
+  kable_styling()
+
+```
+
+
+```{r,message=F,warning=F}
+
+# two ore more non-linear effects 
+
+peru.m.m5$summary.random$week %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+
+
+peru.m.m5$summary.random$id.sp %>% as.data.frame() %>% slice_tail(n = 5) %>% kbl() %>%
+  kable_styling()
+```
+
+
+Again we collect the information of the object resulting from using `inla()`
+
+```{r,message=F,warning=F}
+
+db.m.sp.fit    <- db.m.sp                                          %>% 
+                  ungroup()                                        %>% 
+                  mutate(fit      =peru.m.m5$summary.fitted.values$mean,
+                         min_inter=peru.m.m5$summary.fitted.values$`0.025quant`,
+                         max_inter=peru.m.m5$summary.fitted.values$`0.975quant`)
+
+
+db.lima.m.fit <- db.m.sp.fit %>% 
+                 filter(prov=="LIMA")
+
+
+
+
+
+fit.m.m1 <- lima.m.m1$summary.fitted.values$mean
+fit.m.m2 <- lima.m.m2$summary.fitted.values$mean
+fit.m.m3 <- lima.m.m3$summary.fitted.values$mean
+fit.m.m4 <- db.lima.m.fit$fit
+min.m.m4 <- db.lima.m.fit$min_inter
+max.m.m4 <- db.lima.m.fit$max_inter 
+
+n.m      <- db.lima$n
+
+
+datos.m  <-  list("AR(1)"=fit.m.m1,"RW(1)"=fit.m.m2,
+                "AR(1)RW(1)"=fit.m.m3,"AR(1)RW(1) with Spatial effects"=fit.m.m4) %>% 
+           as.data.frame() %>% 
+           melt( variable.name = "modelo",
+                value.name    = "fit") %>% 
+           group_by(modelo) %>% 
+           mutate(actual    = n.m,
+                  date      = db.n$date) %>% 
+           ungroup() %>% 
+           mutate(min_inter = c(lima.m.m1$summary.fitted.values$`0.025quant`,
+                                lima.m.m2$summary.fitted.values$`0.025quant`,
+                                lima.m.m3$summary.fitted.values$`0.025quant`,
+                                min.m.m4),
+                                
+                                
+                  max_inter = c(lima.m.m1$summary.fitted.values$`0.975quant`,
+                                lima.m.m2$summary.fitted.values$`0.975quant`,
+                                lima.m.m3$summary.fitted.values$`0.975quant`,
+                                max.m.m4)  
+           ) 
+```
+
+and again we plot the results of the model to compare its fit with the true data.
+
+```{r,echo=F,message=F,warning=F,fig.width=15,fig.height=15}
+
+datos.m %>% 
+ggplot()                        +
+geom_line(aes(x=date,y=actual),lwd=0.7) +
+geom_line(aes(x=date,y=fit),color="#011f4b",lwd=0.7,linetype="dashed")    +
+geom_ribbon(aes(x=date,y=fit,ymin=min_inter, ymax=max_inter), 
+                alpha=0.2,       #transparency
+                fill="#011f4b",
+            color="#011f4b",lwd=0.7) +
+facet_wrap(vars(modelo))        +
+theme_bw()+
+xlab(" ") +
+ylab("Numero de casos")+
+geom_vline(xintercept = as.Date("2019-01-07"), linetype="dotted", 
+                color = "black", size=1.5)+
+theme(plot.title = element_text(hjust = 0.5,size = "20pts"),
+      strip.background =element_rect(fill="#011f4b"),
+      strip.text = element_text(color = "white",face = "bold",size = "5pts")) 
+
+```
+
+
+
+
+
+### Performance{.tabset}
+
+Finally, we follow the same steps as in the temporal focus section.
+
+```{r,message=F,warning=F}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mape,mpe,rmse,msd)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.m <- datos.m                    %>% 
+             filter(date>=as.Date("2019-01-07")) %>% 
+             group_by(modelo)         %>%
+             perform.metrics(truth    = actual, 
+                             estimate = fit)
+
+#results table
+tbl.yrd.m                               %>% 
+pivot_wider(id_cols     = modelo,
+            names_from  = .metric,
+            values_from = .estimate)    %>%         
+gt()                                    %>%
+tab_header(
+    title    = md("out-of-sample accuracy metrics"),
+                  
+    #subtitle   ="out-of-sample accuracy metrics"
+    
+    ) %>% 
+data_color(
+    columns = vars(mae,mape,mpe,rmse,msd),
+    colors = scales::col_numeric(
+      palette = c(
+        "#011f4b","white"),
+      domain = NULL)
+  )%>% tab_footnote(
+    footnote = "mae = mean absolute error",
+    locations = cells_column_labels(columns = mae)
+  ) %>%  tab_footnote(
+    footnote = "mape = Mean absolute percent error",
+    locations = cells_column_labels(columns = mape))%>%  
+    tab_footnote(
+    footnote = "mpe = Mean percentage error",
+    locations = cells_column_labels(columns = mpe))%>%  
+    tab_footnote(
+    footnote = "rsme = Root square mean error",
+    locations = cells_column_labels(columns = rmse))%>%  
+    tab_footnote(
+    footnote = "msd = Mean signed deviation",
+    locations = cells_column_labels(columns = msd))
+
+```
+
+The spatial model, as can be seen, although it does not collect the temporal patterns quite well, on average in terms of precision it is the best resulting model since it not only obtains predictions with more limited credibility intervals but also surpasses the other models in terms of the **out-of-sample prediction**. Finally, it is worth mentioning that these results can be widely improved with the adequate specification of the linear predictor using a priori structures more appropriate to the data or perhaps other more complex ones, as well as considering other control variables.
