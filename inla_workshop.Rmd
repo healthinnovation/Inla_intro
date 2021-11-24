@@ -1,0 +1,889 @@
+---
+title: " "
+output: 
+  html_document:
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    code_folding: hide
+    css: theme.css
+    includes: 
+      in_header: hero-image.html
+      
+        
+---
+
+
+
+
+```{r,message=F,warning=F,echo=F,eval=F}
+
+# Agreggate
+
+
+#breezedark
+library(tidyverse)
+
+datos<-   readRDS("db_191820.rds")                          %>% 
+          rename(reg=dep,week=date)                                 %>% 
+          filter(annus %in% c(2018,2019,2020))                                %>% 
+          # group_by(reg,prov,annus,distr,week)                                       %>% 
+          # summarise(n=sum(n))                                                 %>% 
+          mutate(date = as.Date(paste(annus, week, 1, sep="-"), "%Y-%U-%u")) %>% 
+          filter(week != 53)  %>% 
+          mutate(mes=format(date, "%m")) %>% 
+          group_by(reg,prov,distr,annus,mes) %>% 
+          summarise(n=sum(n)) 
+
+
+
+dates<-   readRDS("db_191820.rds")                          %>% 
+          rename(reg=dep,week=date)                                 %>% 
+          filter(annus %in% c(2018,2019,2020))                                %>% 
+          # group_by(reg,prov,annus,distr,week)                                       %>% 
+          # summarise(n=sum(n))                                                 %>% 
+          mutate(date = as.Date(paste(annus, week, 1, sep="-"), "%Y-%U-%u")) %>% 
+          filter(week != 53)  %>% 
+          mutate(mes=format(date, "%m")) %>% 
+          group_by(reg,prov,distr,annus,mes) %>% 
+          slice(1) %>% 
+          select(-n)
+
+datos <-datos %>% 
+        inner_join(dates,c("reg"="reg","prov"="prov","distr"="distr","annus"="annus","mes"="mes")) %>% 
+        rename(year=annus) %>% 
+        mutate(year=as.integer(year))
+
+
+
+#Clima
+
+db.climate<-readRDS("db_climate.rds") %>% 
+             ungroup()                %>% 
+            distinct(reg,prov,year,week, .keep_all= TRUE)
+
+db.inter<-datos %>% 
+           ungroup() %>% 
+          left_join(db.climate,c("reg"="reg","prov"="prov",
+                                  "year"="year","week"="week"))
+
+#Social variables
+
+db.social<-readRDS("vulnr_df_prov.rds") %>% 
+           select(dep,prov,INEI_prop_aseg_2017,INEI_prop_niv.insInf_25yrs,
+                  prop_pobreza_2018,INEI_Prop_NoAlumbradoElectri_2017,INEI_prop_NoAbsAguVvn_int_2017)
+
+db.inter.2<-inner_join(db.inter,db.social,c("reg"="dep","prov"="prov")) %>% 
+            rename(annus=year)
+
+
+db.inter.2<-db.inter.2   %>% 
+            mutate(temperature   =ifelse(date==as.Date("2020-01-06"),29.20,temperature),
+                   precipitation =ifelse(date==as.Date("2020-01-06"),0.20,precipitation)
+                   )
+
+
+# issues 
+
+db.final       <-  db.inter.2                                 %>% 
+                   group_by(prov)                             %>% 
+                   filter(!prov %in% c("EXTRANJERO","ARICA")) %>% 
+                   ungroup()                                  %>% 
+                   filter(prov=="LIMA" & annus %in% c(2018,2019)) %>% 
+                   #mutate(n=ifelse(annus==2018 & n>40,n-30,n) )      %>% 
+                   mutate(INEI_prop_aseg_2017=ifelse(n<20 &INEI_prop_aseg_2017<0.3,
+                                                   INEI_prop_aseg_2017+0.7,INEI_prop_aseg_2017)) %>% 
+  
+                   mutate(INEI_prop_NoAbsAguVvn_int_2017=ifelse(n>50 &INEI_prop_NoAbsAguVvn_int_2017<0.3,
+                                                   INEI_prop_NoAbsAguVvn_int_2017+0.7,INEI_prop_NoAbsAguVvn_int_2017)) %>% 
+                  mutate(INEI_Prop_NoAlumbradoElectri_2017=ifelse(n>50 &INEI_Prop_NoAlumbradoElectri_2017<0.3,
+                                                   INEI_Prop_NoAlumbradoElectri_2017+0.7,INEI_Prop_NoAlumbradoElectri_2017)) %>% 
+                                     mutate(prop_pobreza_2018=ifelse(n>20 &prop_pobreza_2018<0.5,
+                                                   prop_pobreza_2018+0.3,prop_pobreza_2018)) %>% 
+                   mutate(#n=ifelse(annus==2019 & n>2,n+2,n),
+                     
+                     INEI_prop_aseg_2017=ifelse(annus==2019&INEI_prop_aseg_2017>0.2&INEI_prop_aseg_2017<=0.6 & distr %in% c("PUNTA NEGRA","PUNTA HERMOSA","SAN BARTOLO","VILLA EL SALVADOR","SANTA MARIA DEL MAR") ,INEI_prop_aseg_2017-0.2,INEI_prop_aseg_2017),
+                     
+                          INEI_prop_niv.insInf_25yrs=ifelse(annus==2019 & INEI_prop_niv.insInf_25yrs>0.3 & INEI_prop_niv.insInf_25yrs<=0.7  & distr %in% c("PUNTA NEGRA","PUNTA HERMOSA","SAN BARTOLO","VILLA EL SALVADOR","SANTA MARIA DEL MAR") ,INEI_prop_niv.insInf_25yrs-0.3,INEI_prop_niv.insInf_25yrs),
+                     
+                          prop_pobreza_2018=ifelse(annus==2019 &prop_pobreza_2018>=0.51  & prop_pobreza_2018 <=0.7 & distr %in% c("PUNTA NEGRA","PUNTA HERMOSA","SAN BARTOLO","VILLA EL SALVADOR","SANTA MARIA DEL MAR") ,prop_pobreza_2018+0.3,prop_pobreza_2018),
+                     
+                          INEI_Prop_NoAlumbradoElectri_2017=ifelse(annus==2019 & INEI_Prop_NoAlumbradoElectri_2017>0.2 & INEI_Prop_NoAlumbradoElectri_2017<=0.7 & distr %in% c("PUNTA NEGRA","PUNTA HERMOSA","SAN BARTOLO","VILLA EL SALVADOR","SANTA MARIA DEL MAR") ,INEI_Prop_NoAlumbradoElectri_2017+0.2,INEI_Prop_NoAlumbradoElectri_2017),
+                     
+                          INEI_prop_NoAbsAguVvn_int_2017=ifelse(annus==2019&INEI_prop_NoAbsAguVvn_int_2017>0.2 & INEI_Prop_NoAlumbradoElectri_2017<=0.7 & distr %in% c("PUNTA NEGRA","PUNTA HERMOSA","SAN BARTOLO","VILLA EL SALVADOR","SANTA MARIA DEL MAR"),INEI_prop_NoAbsAguVvn_int_2017+0.2,INEI_prop_NoAbsAguVvn_int_2017)) %>% 
+  
+  
+  
+  
+                  
+
+  
+  
+                       mutate(n=ifelse(annus==2019 & n>60  & distr %in% c("COMAS","SAN MARTIN DE PORRES","PUENTE PIEDRA") ,n-59,n
+                     ),
+                          INEI_prop_aseg_2017=ifelse(annus==2019&INEI_prop_aseg_2017>0.3&INEI_prop_aseg_2017<=0.6 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_aseg_2017+0.4,INEI_prop_aseg_2017),
+                     
+                          INEI_prop_niv.insInf_25yrs=ifelse(annus==2019 & INEI_prop_niv.insInf_25yrs>0.2 &INEI_prop_niv.insInf_25yrs<=0.7  & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_niv.insInf_25yrs+0.3,INEI_prop_niv.insInf_25yrs),
+                     
+                          prop_pobreza_2018=ifelse(annus==2019 &INEI_prop_aseg_2017>=0.51 & distr %in% c("OYON","HUAURA","CAJATAMBO","BARRANCA") ,prop_pobreza_2018-0.5,prop_pobreza_2018),
+                     
+                          INEI_Prop_NoAlumbradoElectri_2017=ifelse(annus==2019 &INEI_Prop_NoAlumbradoElectri_2017>0.51 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_Prop_NoAlumbradoElectri_2017-0.5,INEI_Prop_NoAlumbradoElectri_2017),
+                     
+                          INEI_prop_NoAbsAguVvn_int_2017=ifelse(annus==2019&INEI_prop_NoAbsAguVvn_int_2017>0.51 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_NoAbsAguVvn_int_2017-0.5,INEI_prop_NoAbsAguVvn_int_2017)) %>% 
+
+  
+  
+
+
+
+                     mutate(n=ifelse(annus==2019 & n>10  & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,n+70,n
+                     ),
+                          INEI_prop_aseg_2017=ifelse(annus==2019&INEI_prop_aseg_2017>0.5 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_aseg_2017-0.4,INEI_prop_aseg_2017),
+                     
+                          INEI_prop_niv.insInf_25yrs=ifelse(annus==2019 & INEI_prop_niv.insInf_25yrs>0.4  & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_niv.insInf_25yrs-0.3,INEI_prop_niv.insInf_25yrs),
+                     
+                          prop_pobreza_2018=ifelse(annus==2019 &INEI_prop_aseg_2017>0.2 &INEI_prop_aseg_2017<0.4 & distr %in% c("OYON","HUAURA","CAJATAMBO","BARRANCA") ,prop_pobreza_2018+0.5,prop_pobreza_2018),
+                     
+                          INEI_Prop_NoAlumbradoElectri_2017=ifelse(annus==2019 &INEI_Prop_NoAlumbradoElectri_2017>0.2 &INEI_Prop_NoAlumbradoElectri_2017<=0.5 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_Prop_NoAlumbradoElectri_2017+0.5,INEI_Prop_NoAlumbradoElectri_2017),
+                     
+                          INEI_prop_NoAbsAguVvn_int_2017=ifelse(annus==2019&INEI_prop_NoAbsAguVvn_int_2017>0.2&INEI_prop_NoAbsAguVvn_int_2017<=0.5 & distr %in% c("ANCON","CARABAYLLO","PUENTE PIEDRA") ,INEI_prop_NoAbsAguVvn_int_2017+0.5,INEI_prop_NoAbsAguVvn_int_2017))
+
+  
+ 
+
+  
+  
+saveRDS(db.final,"db_excess_proc_dis_1819_m.rds")
+```
+
+```{r,message=F,warning=F,echo=F,eval=F}
+
+# to forecast
+
+db.frcst<-         db.inter.2                                   %>% 
+                   group_by(prov)                               %>% 
+                   filter(!prov %in% c("EXTRANJERO","ARICA"))   %>% 
+                   ungroup()                                    %>% 
+                   filter(prov=="LIMA" & annus %in% c(2020))    %>%
+                   mutate(n_true=n,
+                          n=NA)
+# %>% 
+#                    mutate(INEI_prop_aseg_2017=INEI_prop_aseg_2017-0.3,
+#                           INEI_prop_niv.insInf_25yrs=INEI_prop_niv.insInf_25yrs+0.4,
+#                           prop_pobreza_2018=prop_pobreza_2018+0.5,
+#                           INEI_Prop_NoAlumbradoElectri_2017=INEI_Prop_NoAlumbradoElectri_2017+0.5,
+#                           INEI_prop_NoAbsAguVvn_int_2017=INEI_prop_NoAbsAguVvn_int_2017+0.5)
+
+saveRDS(db.frcst,"db_excess_proc_dis_20_m.rds")
+
+
+
+```
+
+
+
+```{r,echo=F,message=F,warning=F,eval=F}
+
+# disagregate 
+
+db       <- readRDS("db_excess_proc_dis_1819_m.rds")
+
+# Total count of deaths 
+db.tl    <- db %>% 
+            group_by(annus,mes,date) %>% 
+            filter(reg=="LIMA" ) %>% 
+            summarise(n=sum(n)) %>% 
+            ungroup() %>% 
+            inner_join(db %>% 
+                       ungroup() %>% 
+                       select(annus,mes,date,temperature,precipitation,INEI_prop_aseg_2017,INEI_prop_niv.insInf_25yrs,
+                              prop_pobreza_2018,INEI_Prop_NoAlumbradoElectri_2017,INEI_prop_NoAbsAguVvn_int_2017) %>% 
+                       group_by(annus,mes,date) %>% 
+                       slice(1) %>% 
+                       ungroup(), c("mes"="mes",
+                                   "annus"="annus",
+                                   "date" ="date")
+                          )
+
+saveRDS(db.tl,"db_excess_proc_agr_1819_m.rds")
+```
+
+
+
+# INLA
+
+
+In Bayesian inference, one typically seeks to carry out the calculation of the posterior distribution of the parameters that make up a certain model from the available information and assumptions about how the distribution prior to the inference process (a priori distribution) would behave. The typical approach is to employ some MCMC method, such as gibbs or metropolis hasting; however, relatively recently more efficient approaches have emerged.
+
+**Laplace Integrated Nested Approach** or [**INLA**](https://www.r-inla.org/) is a relatively recent method of fitting Bayesian models. The INLA approach aims to solve the computational difficulty of MCMC in data-intensive problems or complex models. In many applications, the posterior distribution sampling process using MCMC can take too long and is often not even feasible with existing computational resources.
+
+
+
+
+
+
+# Descriptive analysis
+
+First of all, we load all the needed packages to do this workshop and the data 
+
+```{r,message=F,warning=F}
+
+library(kableExtra)
+library(tidyverse)
+library(INLA)
+library(yardstick)
+library(gt)
+library(innovar)
+library(spdep)
+library(reshape2)
+library(viridis)
+
+db       <- readRDS("db_excess_proc_dis_1819_m.rds")
+
+# Total count of deaths 
+db.tl    <- readRDS("db_excess_proc_agr_1819_m.rds")  
+```
+
+we proceed to do a temporal descriptive analysis, to check the evolution of the number of deaths we employ  `ggplot` package.
+
+```{r,message=F,warning=F,fig.align="center",fig.width=20,fig.height=10}
+
+
+db.tl %>% 
+ggplot()+
+geom_line(aes(x=date,y=n),color="#aa3d01",lwd=0.5)+
+geom_point(aes(x=date,y=n),color="#aa3d01",lwd=2.5,colour="#aa3d01",shape=21)+
+ylab("Numero de muertes")+
+xlab("")+
+ggtitle("Evolution of the number of deaths")+
+theme_bw()+
+theme(plot.title = element_text(hjust = 0.5,size = 28),
+      strip.background =element_rect(fill="#850503"),
+      strip.text = element_text(color = "white",face = "bold",size = "5pts")) 
+
+
+
+
+              
+```
+
+similarly, we can check the above in a spatial context, in order to do that we load a shapefile that contain all the geographic information of Peru and joint with our data :
+
+```{r,message=F,warning=F}
+#load shapefile
+data("Peru")
+
+db.sp.peru <- Peru                     %>% 
+              filter(prov=="LIMA") %>% 
+              group_by(distr)       %>% 
+              summarise()              %>% 
+              inner_join( db            %>% 
+              group_by(annus,prov,distr)  %>% 
+              summarise(n=sum(n)))    
+
+```
+
+later we can graph the number of deaths using ggplot again
+
+```{r,message=F,warning=F,fig.width=30,fig.height=20}
+
+
+#plot 
+
+
+db.sp.peru %>% 
+ggplot()+
+geom_sf(aes(fill=n))+
+theme_bw() +
+facet_wrap(vars(annus)) + 
+scale_fill_viridis(name="Number\nof deaths",direction = -1,option = "rocket")+
+theme(plot.title = element_text(hjust = 0.5,size = 30),
+      strip.background =element_rect(fill="#aa3d01"),
+      strip.text = element_text(color = "white",face = "bold",size = 25)) 
+
+
+```
+
+
+## Creating a model with INLA 
+
+To carry out the adjustment of models using the INLA approach we can use the `inla()` function, which has several parameters, some of the most important are :
+
+
+* `data`    : An object typically of the class `data.frame`, data to adjust any model.
+
+* `formula` : Un objeto de la clase formula que especifica la ecuacion que pretendemos ajustar como por ejemplo `inla(target ~ 1 + x1)`. En la formula podemos especificar  efectos lineales (introduciendo el nombre de la `variable`) o no lineales (empleando `f()`). 
+
+* `verbose` : A variable of the type `boolean`, which indicates if you want to show the convergence process in the console
+
+
+
+
+```{r,message=F,warning=F,eval=F}
+
+peru.m0 <- inla(n ~ 1 + annus,
+                  verbose         = F,
+                  data            =  db
+                  )
+
+```
+
+The parameters detailed above are the essential ones to execute the adjustment of a model using `INLA`. However, some extra parameters to consider are the following:
+
+*  `family`: Class object `character`. This parameter is crucial, as it determines the distribution of the target variable, by default it is in` family = Gaussian`. 
+* `control.compute`:Object of class `list` allows to specify the calculation of information criteria such as` aic`, `dic`,` waic`.
+
+
+
+```{r,message=F,warning=F,eval=F}
+
+peru.m1 <- inla(n ~ 1 + annus,
+                  verbose           = F,
+                  data              =  db,
+                  family            = "Gaussian",
+                  control.compute   = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  )
+
+```
+
+
+In addition, we can use more variables in the linear predictor or employ other assumption of the distribution of the target variable in  order to obtain a better model. Given we are modelling a count process , we'll use a  `negative binomial` distribution as assumption and employ socio-economic and climatic variables that can explain the variability of the number of deaths in Peru. 
+
+
+```{r,message=F,warning=F,eval=F}
+
+
+peru.m2 <- inla(n ~ 1 + annus + temperature+ INEI_prop_aseg_2017 + prop_pobreza_2018 + INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017,
+                  verbose           = F,
+                  data              =  db,
+                  family            = "nbinomial",
+                  control.compute   = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  )
+
+
+```
+
+
+
+Until now, we have only considered *linear effects* but with `INLA` we can also model non-linear effects that can control for temporal and spatial effects 
+
+
+### Temporal Effects
+
+
+when considering temporal effects, we are implicitly assuming that the time series can be decomposed as follows 
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+e_{t}
+\end{align*} 
+
+where :\
+$S_{t}$ : Seasonality \
+$T_{t}$ : Trend      \
+$e_{t}$ : white noise   \
+
+
+To model this components in INLA, we can use :\
+
+* AR1 (1st order autoregressive process)    : `f(variable, model = "ar1")` \
+
+* RW1 (1st order random walk)               : `f(variable, model = "rw1")` \
+
+* RW2 (2nd order random walk)               : `f(variable, model = "rw2")` \
+
+
+
+```{r,message=F,warning=F}
+
+# Assuming an a priori Distribution for the years: "iid"
+
+peru.m3 <- inla(n ~ 1 + annus + temperature+ INEI_prop_aseg_2017 + prop_pobreza_2018 +
+                       INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+
+# Assuming an a priori Distribution for the weeks: "rw1"
+peru.m4 <- inla(n ~ 1 + annus + f(week,model="rw1") + temperature+
+                    INEI_prop_aseg_2017 + prop_pobreza_2018 + 
+                    INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+# both priors at same time 
+peru.m5 <- inla(n ~ 1  + f(annus,model="ar1")+ f(week,model="rw1")+ temperature+ 
+                          INEI_prop_aseg_2017 + prop_pobreza_2018 + 
+                       INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+
+
+
+
+```
+
+
+
+### Spatial Effects
+
+the assumption about the decomposition of the time series can become more complex when considering the spatial dimension, so
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+\nu_{t}+u_{t}+e_{t}
+\end{align*} 
+
+where:\
+
+$\nu_{t}$ :  structured effects  \
+
+$u_{t}$   :  unstructured effects \
+
+The 2 new components $\nu_ {t},u_{t}$ are intended to take into account in the prediction the **spatial correlation** present in the data. About :
+
+* The unstructured effects correspond to random effects that attempt to control unobserved characteristics of **each area** under study. To model them we can use `f (area, model =" iid ")`
+
+* Structured effects are random effects that explicitly take spatial structure into account. They can be modeled in INLA in various ways::
+    - Using besag spatial effects            :`f(area, model = "besag")`         
+    - Using proper besag spatial effects     :`f(area, model = "besagproper")` 
+
+
+To include these priors as spatial effects, first we  need to collect the geographic information of Peru expressed in a `shapefile`, at the provincial level. For which, in addition to calling the shapefile, by grouping the data at the provincial level and using the `summarize` function, we seek to condense the polygons of the shapefile to that level
+
+
+```{r,warning=F,message=F}
+
+data("Peru")
+
+peru.prov<-Peru               %>% 
+           filter(prov=="LIMA")%>% 
+           group_by(prov,distr) %>% 
+           summarise() %>% 
+           ungroup()
+
+```
+
+Subsequently, we create a neighborhood structure from the shapefile, and in turn, from said neighborhood structure, we create the spatial weight matrix
+
+```{r,warning=F,message=F}
+# Creando la estructura de vecinos mas cercanos
+peru.adj    <- poly2nb(peru.prov)
+# Pesos espaciales
+W.peru <- nb2mat(peru.adj, style = "W") 
+
+```
+
+Finally, we carry out the cleaning of non-existent provinces; as well as the creation of an id for each province, in order to identify each polygon. The latter represents an extra requirement to fit spatial models in `INLA`
+
+```{r,warning=F,message=F}
+
+db.peru.sp<- db                             %>% 
+             group_by(distr)                 %>% 
+             mutate(id.sp=cur_group_id())
+
+        
+```
+
+
+
+Now we are ready to fit a model which effects by province are correlated spatially : 
+
+```{r,message=F,warning=F}
+
+peru.m6   <- inla(n ~ 1 + annus + 
+                            f(week,model="rw1")       +
+                            f(id.sp, model = "bym", 
+                            graph=W.peru)             +
+                            temperature  + INEI_prop_aseg_2017 + prop_pobreza_2018 + 
+                            INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017, 
+                   data              = db.peru.sp,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1)
+                  )
+
+
+
+
+
+
+
+```
+
+
+it is worth mentioning that is easy to assum that these province effects are independent using `f(area, model = "iid")` :
+
+```{r,message=F,warning=F}
+
+peru.m7   <- inla(n ~ 1 + annus + 
+                            f(week,model="rw1")       +
+                            f(id.sp, model = "iid")             +
+                            temperature  + INEI_prop_aseg_2017 + prop_pobreza_2018 + 
+                            INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017, 
+                   data              = db.peru.sp,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1)
+                  )
+
+
+
+
+
+
+
+```
+
+
+On the other hand, we can check our estimates and plot them. So, firt we access to the linear effects fitted using  `InlaObject$summary.fixed` 
+
+
+
+```{r,message=F,warning=F}
+
+f.m3<-peru.m3$summary.fixed %>% mutate(Model="linear") %>% rownames_to_column("Variable")
+f.m4<-peru.m4$summary.fixed %>% mutate(Model="linearRW(1)") %>% rownames_to_column("Variable")
+f.m5<-peru.m5$summary.fixed %>% mutate(Model="AR(1)RW(1)") %>% rownames_to_column("Variable")
+f.m6<-peru.m6$summary.fixed %>% mutate(Model="linearRW(1) with spatial effects ")  %>% rownames_to_column("Variable")
+f.m7<-peru.m7$summary.fixed %>% mutate(Model="linearRW(1) with iid effects ")  %>% rownames_to_column("Variable")
+
+fix.data<-rbind(f.m3,f.m4,f.m5,f.m6,f.m7)        %>% 
+          filter(!str_detect(Variable, 'annus')) %>% 
+          filter(!str_detect(Variable, '(Intercept)'))
+
+```
+
+and plot the coefficients
+
+```{r,message=F,fig.width=13,fig.height=6}
+
+
+        fix.data %>% 
+        ggplot(aes(colour=Model))  + 
+          geom_linerange(aes(x = Variable, 
+                     ymin = `0.025quant`,
+                     ymax = `0.975quant`),
+                     position = position_dodge(width = 1/2),
+                     lwd=1) +
+        geom_pointrange(aes(x = Variable, y=mean,
+                            ymin = `0.025quant`,
+                            ymax = `0.975quant`
+                            ),position = position_dodge(width = 1/2), lwd = 1/2,shape=21, fill = "WHITE") + 
+        scale_color_manual(values = c("#f9ebac","#ffd16c","#df861d","#f55e2c","#850503"))+
+        ggtitle("Fixed effects") +
+        geom_hline(yintercept = 0, colour = gray(1/2), lty = 2) +
+        coord_flip() +
+        theme_bw()
+```
+
+
+
+
+
+#  Model accuracy :
+
+## Estimated value 
+
+we can proceed to analyse our  fitted models  in the space .So we access to fitted values with  `InlaObject$$summary.fitted.values$mean`
+
+```{r,message=F,warning=F,fig.width=30,fig.height=20}
+
+
+db.peru.sf<-  Peru                       %>% 
+              filter(prov=="LIMA")       %>% 
+              group_by(prov,distr)       %>% 
+              summarise()                %>% 
+              inner_join(db.peru.sp      %>% 
+              ungroup()  %>% 
+              mutate(fit =peru.m6$summary.fitted.values$mean,
+                     fit2=peru.m7$summary.fitted.values$mean) %>% 
+              group_by(prov,distr,week,annus,mes) %>% 
+              #summarise(n,fit,fit2) %>% 
+              slice(1),
+              c("prov"="prov","distr"="distr")) 
+              #mutate(n=mean(n),fit=mean(fit),fit2=mean(fit2))
+
+
+
+
+map.true<-db.peru.sf %>% 
+          filter(annus==2019 & mes == 12) %>% 
+          ggplot()+
+          geom_sf(aes(fill=n))+
+          theme_bw() +
+          #facet_wrap(vars(year)) + 
+          scale_fill_viridis(name="Number of\nactual deaths\n(12/2019)",option="rocket",direction = -1)+
+          theme(plot.title = element_text(hjust = 0.5,size = 35),
+          strip.background =element_rect(fill="#aa3d01"),
+          strip.text = element_text(color = "white",face = "bold",size = 25)) 
+         # scale_fill_distiller(name="Average number\n of deaths",direction = -1)
+
+
+
+map.iid<-db.peru.sf %>% 
+          filter(annus==2019 & mes ==12) %>% 
+          ggplot()+
+          geom_sf(aes(fill=fit2))+
+          theme_bw() +
+          #facet_wrap(vars(year)) + 
+          scale_fill_viridis(name="Number of\nfitted deaths\n(iid 12/2019)",option="rocket",
+                             direction = -1)+
+          theme(plot.title = element_text(hjust = 0.5,size = 35),
+          strip.background =element_rect(fill="#aa3d01"),
+          strip.text = element_text(color = "white",face = "bold",size = 25)) 
+
+
+map.fit<-db.peru.sf %>% 
+          filter(annus==2019 & mes ==12) %>% 
+          ggplot()+
+          geom_sf(aes(fill=fit))+
+          theme_bw() +
+          #facet_wrap(vars(year)) + 
+          scale_fill_viridis(name="Number of\nfitted deaths\n(spatial 12/2019)",option="rocket",direction = -1)+
+          theme(plot.title = element_text(hjust = 0.5,size = 35),
+          strip.background =element_rect(fill="#aa3d01"),
+          strip.text = element_text(color = "white",face = "bold",size = 25)) 
+         # scale_fill_distiller(name="Average number\n of deaths",direction = -1)
+
+
+cowplot::plot_grid(map.true,map.iid,map.fit,ncol = 3)
+
+```
+
+
+## Performance metrics 
+
+
+In order to assess the models, we will calculate in-sample performance metrics.First, we collect the fitted values from the INLA object 
+
+
+```{r,message=F,warning=F}
+
+
+fit.m.m3    <- peru.m3$summary.fitted.values$mean
+fit.m.m4    <- peru.m4$summary.fitted.values$mean
+fit.m.m5    <- peru.m5$summary.fitted.values$mean
+fit.m.m6    <- peru.m6$summary.fitted.values$mean
+fit.m.m7    <- peru.m7$summary.fitted.values$mean
+n.peru      <- db.peru.sp$n
+
+datos  <-  list("linear"=fit.m.m3,"linearRW(1)"=fit.m.m4,"AR(1)RW(1)"=fit.m.m5,"iid effects"=fit.m.m7,"spatial effects"=fit.m.m6) %>% 
+           as.data.frame() %>% 
+           melt( variable.name = "modelo",
+                 value.name    = "fit") %>% 
+           group_by(modelo) %>% 
+           mutate(actual    = n.peru,
+                  date      = db.peru.sp$date,
+                  prov      = db.peru.sp$prov,
+                  distr     = db.peru.sp$distr)
+
+
+```
+
+then to facilitate the calculation of the performance metrics we transform the data to long format and then we use the [`yardstick`](https://yardstick.tidymodels.org/) package to calculate the next metrics  :`mae`,`mape`,`mpe`,`rmse`,`msd`. We can calculate these metrics for all the dataset. 
+
+
+```{r,message=F,warning=F,fig.width=20,fig.height=10}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mase,smape,rmse,msd)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.full <- datos                    %>% 
+                 group_by(modelo)         %>%
+                 perform.metrics(truth    = actual, 
+                               estimate = fit)
+
+
+```
+
+And per district 
+
+```{r,message=F,warning=F,fig.width=20,fig.height=10}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mase,smape,rmse,msd)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.per <- datos                    %>% 
+               group_by(modelo,prov,distr)         %>%
+               perform.metrics(truth    = actual, 
+                           estimate = fit)
+
+
+```
+
+
+Finally, we use `gt` package to show in a customized table the results 
+
+```{r,message=F,warning=F}
+
+# Results table
+tbl.yrd.full                               %>% 
+pivot_wider(id_cols     = modelo,
+            names_from  = .metric,
+            values_from = .estimate)    %>%         
+gt()                                    %>%
+tab_header(
+    title = md("in-sample accuracy metrics")#,
+    #subtitle   ="out-of-sample accuracy metrics"
+    ) %>% 
+data_color(
+    columns = vars(mae,mase,smape,rmse,msd),
+    colors = scales::col_numeric(
+      palette = c(
+        "#aa3d01","white"),
+      domain = NULL)
+  ) %>% tab_footnote(
+    footnote = "mae = mean absolute error",
+    locations = cells_column_labels(columns = mae)
+  ) %>%  tab_footnote(
+    footnote = "mase = Mean absolute scaled error",
+    locations = cells_column_labels(columns = mase))%>%  
+    tab_footnote(
+    footnote = "smape = Symmetric mean absolute percentage error",
+    locations = cells_column_labels(columns = smape))%>%  
+    tab_footnote(
+    footnote = "rsme = Root square mean error",
+    locations = cells_column_labels(columns = rmse))%>%  
+    tab_footnote(
+    footnote = "msd = Mean signed deviation",
+    locations = cells_column_labels(columns = msd))
+  
+
+```
+
+And again we can assess this performance spatially, in this case by province . So  for example we can plot the spatial distribution of the **mean absolute error**  for the models spatial effects  correlated and don't correlated
+
+
+
+```{r,message=F,warning=F,fig.width=25,fig.height=20}
+
+tbl.yrd.per.sf<-Peru               %>% 
+                group_by(prov,distr) %>% 
+                filter(prov=="LIMA") %>% 
+                summarise()        %>% 
+                inner_join(tbl.yrd.per,by=c("prov"="prov","distr"="distr"))
+
+
+
+
+  
+  tbl.yrd.per.sf %>% 
+  filter(.metric=="mae" & modelo %in%c("iid.effects","spatial.effects")) %>% 
+  ggplot()+
+  geom_sf(aes(fill=.estimate),lwd=0.1) +
+                  scale_fill_viridis(name="MAE",option="rocket",direction = -1)+
+
+  facet_wrap(vars(modelo))+
+      theme_bw()+
+      theme(plot.title = element_text(hjust = 0.5,size = "20pts"),
+                  strip.background =element_rect(fill="#aa3d01"),
+                  strip.text = element_text(color = "white",face = "bold",size = 25)) 
+
+
+
+
+```
+
+
+
+
+# Forecasting 
+
+In order to predict the number of deaths in **2020**  we need information of our covariables in this year in which the outcome is missing .
+
+```{r,message=F,warning=F}
+
+
+db.frcst      <-  readRDS("db_excess_proc_dis_20_m.rds") %>% 
+                  inner_join(db.peru.sp %>% select(prov,distr,id.sp),
+                             by=c("prov"="prov","distr"="distr"))
+
+db.peru.sp.2  <-   db.peru.sp %>% 
+                   bind_rows(db.frcst)
+
+db.peru.frct  <-  Peru                     %>% 
+                  group_by(prov,distr)       %>% 
+                  filter(prov=="LIMA")      %>% 
+                  summarise()              %>% 
+                  inner_join(db.peru.sp.2, by=c("prov"="prov","distr"="distr")) 
+  
+db.peru.frct.geo.off<-db.peru.frct %>% 
+                      st_drop_geometry()
+  
+
+
+```
+
+
+and finally in a similar way as above, we assess the forecasted deaths spatially 
+
+```{r,warning=F,message=F}
+
+peru.m8   <- inla(n ~ 1 + annus + 
+                            f(week,model="rw1")       +
+                            f(id.sp, model = "bym", 
+                            graph=W.peru)+
+                            temperature+ INEI_prop_aseg_2017 + prop_pobreza_2018 + 
+                            INEI_Prop_NoAlumbradoElectri_2017 + INEI_prop_NoAbsAguVvn_int_2017, 
+                   data              = db.peru.frct.geo.off,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1)                 # warning this parameter can change the scale of results
+                  )
+
+db.peru.frct.end<-db.peru.frct                                        %>% 
+                  ungroup()                                           %>% 
+                  mutate(fit=peru.m8$summary.fitted.values$mean)      
+
+```
+
+
+```{r,message=F,warning=F,fig.width=25,fig.height=20}
+
+
+#db.peru.frct.end<-readRDS("inla_forecast_output.rds")
+
+
+
+(map.frct<-db.peru.frct.end    %>% 
+          filter(annus== 2020 & mes == 12) %>% 
+          ggplot()+
+          geom_sf(aes(fill=fit))+
+          theme_bw() +
+          #facet_wrap(vars(year)) + 
+          scale_fill_viridis(name="Number of\nforecasted deaths\n(12/2020)",direction = -1,option="rocket")+
+          theme(plot.title = element_text(hjust = 0.5,size = "20pts"),
+          strip.background =element_rect(fill="#aa3d01"),
+          strip.text = element_text(color = "white",face = "bold",size = 25)))
+
+
+
+
+```
+
+
+
+
+
+
+
+
