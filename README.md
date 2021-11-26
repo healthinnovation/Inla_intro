@@ -1,4 +1,5 @@
-# Inla_intro
+# Introduction to INLA 
+
 workshop to introduce INLA package:
 1. Descriptive analysis
 2. Spatio temporal Modelling
