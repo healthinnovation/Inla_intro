@@ -32,7 +32,10 @@ Where $\pi(\textbf{y}|\theta)$ is the likelihood of the data $\textbf{y}$ given 
 
 **Laplace Integrated Nested Approach** or [**INLA**](https://www.r-inla.org/) is a recent method of fitting Bayesian models. The INLA approach aims to solve the computational difficulty of MCMC in data-intensive problems or complex models. In many applications, the posterior distribution sampling process using MCMC can take too long and is often not even feasible with existing computational resources.
 
-## Required packages and data {.unnumbered}
+The slides of the "SPATIAL PREDICTION MODELS
+IN R" lecture at UCSD-GPS Fall 2021 can be found [here](https://docs.google.com/presentation/d/1xjdPGbZuMYu92ToRp8PVis-n-jmOSkORLY5d9BIzDz4/edit?usp=sharing)
+
+## Required packages {.unnumbered}
 
 First, we install and load all the needed packages for this workshop. Here a reference for the installation of [`INLA` package](https://www.r-inla.org/download-install)
 
@@ -369,7 +372,7 @@ fix.data %>%
   theme_linedraw()
 ```
 
-However, since we're using Bayesian models to improve the predictions, we're not focusing on the dose-response (mechanism) effects. We're focusing on improving the acuracy of our model to predict current and future trends.
+However, since we're using Bayesian models to improve the predictions, we're not focusing on the dose-response (mechanism) effects. We're focusing on improving the accuracy of our model to predict current and future trends.
 
 # Model accuracy
 
