@@ -1,0 +1,741 @@
+---
+title: " "
+output: 
+  html_document:
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    css: theme.css
+    includes: 
+      in_header: hero-image.html
+      
+        
+---
+
+_**INLA**_
+
+> In Bayesian inference, one typically seeks to carry out the calculation of the posterior distribution of the parameters that make up a certain model from the available information and assumptions about how the distribution prior to the inference process (a priori distribution) would behave. The typical approach is to employ some MCMC method, such as gibbs or metropolis hasting; however, relatively recently more efficient approaches have emerged.
+
+>**Laplace Integrated Nested Approach** or [**INLA**](https://www.r-inla.org/) is a relatively recent method of fitting Bayesian models. The INLA approach aims to solve the computational difficulty of MCMC in data-intensive problems or complex models. In many applications, the posterior distribution sampling process using MCMC can take too long and is often not even feasible with existing computational resources.
+
+# Descriptive analysis
+
+First of all, we load all the needed packages to do this workshop and the data 
+
+```{r,message=F,warning=F}
+# install.packages("kableExtra")
+# install.packages("tidyverse")
+# install.packages("yardstick")
+# install.packages("gt")
+# install.packages("spdep")
+# install.packages("viridis")
+# install.packages("INLA",repos=c(getOption("repos"),INLA="https://inla.r-inla-download.org/R/stable"), dep=TRUE)
+
+
+library(kableExtra)
+library(tidyverse)
+library(yardstick)
+library(gt)
+library(spdep)
+library(viridis)
+library(INLA)
+
+
+#death data and covariables 
+db       <- readRDS("db_excess_proc_dis_1819_m.rds") 
+
+```
+
+we proceed to do a temporal descriptive analysis, to check the evolution of the number of deaths we employ  `ggplot` package.
+
+```{r,message=F,warning=F,fig.align="center",fig.width=20,fig.height=10}
+
+db                                                                                %>% 
+group_by(date)                                                                    %>% 
+summarise(n=sum(n))                                                               %>% 
+ggplot()                                                                           +
+geom_line(aes(x=date,y=n),color="red",lwd=1)                                       +
+geom_point(aes(x=date,y=n),color="red",lwd=4,colour="red",shape=21)                +
+xlab("")                                                                           +
+ylab("")                                                                           +
+ggtitle("Evolution of the number of deaths")                                       +
+theme_linedraw(base_size = 23)                                                     + 
+theme(plot.title         = element_text(hjust = 0.5,size = 28))
+              
+```
+
+similarly, we can check the above in a spatial context, in order to do that we load a shapefile that contain all the geographic information of Peru and joint with our data :
+
+```{r,message=F,warning=F,echo=F,eval=F}
+lima.shp<-        readRDS("peru_shp.rds")           %>% 
+                  filter(prov=="LIMA")              %>% 
+                  group_by(prov,distr)              %>% 
+                  summarise()   
+
+saveRDS(lima.shp,"lima_shp.rds")
+```
+
+
+```{r,message=F,warning=F}
+
+
+#load shapefile
+lima.shp   <- readRDS("lima_shp.rds")
+
+db.sp.lima <- lima.shp                     %>%    
+              inner_join( db               %>% 
+              group_by(year,prov,distr)    %>% 
+              summarise(n=sum(n)))    
+
+```
+
+later we can graph the number of deaths using ggplot again
+
+```{r,message=F,warning=F,fig.width=30,fig.height=20}
+#plot 
+
+db.sp.lima                                                                  %>% 
+ggplot()                                                                     +
+geom_sf(aes(fill=n))                                                         +
+theme_linedraw(base_size = 25)                                               +
+facet_wrap(vars(year))                                                       + 
+scale_fill_viridis(name="Number\nof deaths",direction = -1,option = "rocket")+
+theme(strip.text = element_text(face = "bold",size = 30)) 
+
+
+```
+
+
+# Creating a model with INLA 
+
+To carry out the adjustment of models using the INLA approach we can use the `inla()` function, which has several parameters, some of the most important are :
+
+
+* `data`    : An object typically of the class `data.frame`, data to adjust any model.
+
+* `formula` : Un objeto de la clase formula que especifica la ecuacion que pretendemos ajustar como por ejemplo `inla(target ~ 1 + x1)`. En la formula podemos especificar  efectos lineales (introduciendo el nombre de la `variable`) o no lineales (empleando `f()`). 
+
+* `verbose` : A variable of the type `boolean`, which indicates if you want to show the convergence process in the console
+
+
+
+```{r,message=F,warning=F,eval=F}
+
+lima.m0 <- inla(n ~ 1 + temperature,
+                  verbose         = F,
+                  data            = db
+               )
+
+```
+
+The parameters detailed above are the essential ones to execute the adjustment of a model using `INLA`. However, some extra parameters to consider are the following:
+
+*  `family`: Class object `character`. This parameter is crucial, as it determines the distribution of the target variable, by default it is in` family = Gaussian`. 
+* `control.compute`:Object of class `list` allows to specify the calculation of information criteria such as` aic`, `dic`,` waic`.
+* `link=1` to establish that the fitted values are in the same units as the function as the target variable (this will be very helpful in the prediction phase)
+
+
+
+```{r,message=F,warning=F,eval=F}
+
+lima.m1 <- inla(n ~ 1 + temperature,
+                  verbose           = F,
+                  data              = db,
+                  family            = "Gaussian",
+                  control.compute   = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  )
+
+```
+
+
+In addition, we can use more variables in the linear predictor or employ other assumption of the distribution of the target variable in  order to obtain a better model. Given we are modelling a count process , we'll use a  `negative binomial` distribution as assumption and employ socio-economic and climatic variables that can explain the variability of the number of deaths in Peru. 
+
+
+```{r,message=F,warning=F,eval=F}
+
+
+lima.m2 <- inla(n ~ 1 + year + temperature    + pp.insured  + 
+                        pp.pover + pp.no.elec + pp.no.water,
+                  verbose           = F,
+                  data              =  db,
+                  family            = "nbinomial",
+                  control.compute   = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  )
+
+
+```
+
+
+
+Until now, we have only considered *linear effects* but with `INLA` we can also model non-linear effects that can control for temporal and spatial effects 
+
+
+## Temporal Effects
+
+
+when considering temporal effects, we are implicitly assuming that the time series can be decomposed as follows 
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+e_{t}
+\end{align*} 
+
+where :\
+$S_{t}$ : Seasonality \
+$T_{t}$ : Trend      \
+$e_{t}$ : white noise   \
+
+
+To model this components in INLA, we can use :\
+
+* AR1 (1st order autoregressive process)    : `f(variable, model = "ar1")` \
+
+* RW1 (1st order random walk)               : `f(variable, model = "rw1")` \
+
+* RW2 (2nd order random walk)               : `f(variable, model = "rw2")` \
+
+
+
+```{r,message=F,warning=F}
+
+# Assuming an a priori Distribution for the years: "linear"
+
+lima.m3 <- inla(n ~ 1 + year + temperature + pp.insured + pp.pover +
+                        pp.no.elec + pp.no.water,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list(link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+
+# Assuming an a priori distribution for the weeks: "rw1" and linear for the  year 
+lima.m4 <- inla(n ~ 1 + year + f(week,model="rw1") + temperature +
+                        pp.insured + pp.pover + 
+                        pp.no.elec + pp.no.water,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+# Assuming an a priori distribution for the weeks: "rw1" and ar1 for the year
+lima.m5 <- inla(n ~ 1  + f(year,model="ar1")+ f(week,model="rw1")+ temperature + 
+                          pp.insured + pp.pover + pp.no.elec + pp.no.water,
+                  control.compute = list(dic=TRUE, waic=TRUE,cpo=TRUE),
+                  control.predictor = list( link = 1),
+                  verbose         = F,
+                  family          = "nbinomial",
+                  data            =  db
+                  )
+
+
+
+
+```
+
+
+
+## Spatial Effects
+
+The assumption about the decomposition of the time series can become more complex when considering the spatial dimension, so
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+u_{t}+e_{t}
+\end{align*} 
+
+where:\
+
+$u_{t}$   :  unstructured effects \
+
+The component $u_{t}$  also know as *random effects* are considered  to take into account the spatial dimension of the data and allow control unobserved characteristics of **each area** under study. These components can be modelled with `f(area, model = "iid")` in INLA context, however first we need to identify every spatial unit : 
+
+```{r,warning=F,message=F}
+
+db.lima.sp<- db                               %>% 
+             group_by(distr)                  %>% 
+             mutate(id.sp=cur_group_id())
+
+        
+```
+
+
+Given the above, we are ready to fit a spatial model :
+
+```{r,message=F,warning=F}
+
+lima.m6   <- inla(n ~ 1 +   year                                 + 
+                            f(week,model="rw1")                  +
+                            f(id.sp, model = "iid")              +
+                            temperature  + pp.insured + pp.pover + 
+                            pp.no.elec + pp.no.water, 
+                   data              = db.lima.sp,
+                   control.compute   = list(dic  = TRUE, 
+                                            waic = TRUE, 
+                                            cpo  = TRUE),
+                   control.predictor = list(link = 1)
+                  )
+
+
+```
+
+
+However, we'll could observe in the data :**spatial correlation** between areas, so in order to control for this aspect we need to add our decomposition equation the  component $\nu_{t}$ , *structured effects*, so that our final equation is : \
+
+\begin{align*}
+y_{t} = S_{t}+T_{t}+\nu_{t}+u_{t}+e_{t}
+\end{align*} 
+
+
+These Structured effects are random effects that explicitly take spatial structure into account. They can be modeled in **INLA** in various ways: \
+    - Using besag spatial effects            :`f(area, model = "besag")`         \
+    - Using proper besag spatial effects     :`f(area, model = "besagproper")` 
+
+
+To include these type of priors as spatial effects, first we  need to collect the geographic information of Peru expressed in a `shapefile`, at the district level. For which, we use the shapefile of Lima . Subsequently, we create a neighborhood structure from the shapefile, and in turn, from said neighborhood structure, we create the spatial weight matrix
+
+```{r,warning=F,message=F}
+# Creating the neighborhood structure 
+lima.adj    <- poly2nb(lima.shp)
+# Spatial weights
+W.peru <- nb2mat(lima.adj, style = "W") 
+
+```
+
+Finally, we carry out the cleaning of non-existent provinces; as well as the creation of an id for each province, in order to identify each polygon. The latter represents an extra requirement to fit spatial models in `INLA`
+
+
+Now we are ready to fit a model which effects by district are correlated spatially : 
+
+```{r,message=F,warning=F}
+
+lima.m7   <- inla(n ~ 1   + year                                 + 
+                            f(week,model="rw1")                  +
+                            f(id.sp, model = "bym", 
+                            graph=W.peru)                        +
+                            temperature  + pp.insured + pp.pover + 
+                            pp.no.elec   + pp.no.water, 
+                   data              = db.lima.sp,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1)
+                  )
+
+
+
+
+
+
+
+```
+
+
+
+Given the above resuls, we can check our estimates using the function `summary`.For example for the last model :
+
+```{r,warning=F,message=F}
+
+summary(lima.m7)
+
+```
+
+
+But these results are delivered in a dirty format. So in order to obtain the information of our interest we need to use the operator  `$` over the `INLA` objects.So, for example  firt we  can access to the linear effects fitted using  `InlaObject$summary.fixed` 
+
+
+
+```{r,message=F,warning=F}
+
+f.m3<-lima.m3$summary.fixed %>% mutate(Model="linear")      %>%
+      rownames_to_column("Variable")
+f.m4<-lima.m4$summary.fixed %>% mutate(Model="linearRW(1)") %>%
+      rownames_to_column("Variable")
+f.m5<-lima.m5$summary.fixed %>% mutate(Model="AR(1)RW(1)")  %>%
+      rownames_to_column("Variable")
+f.m6<-lima.m6$summary.fixed                                 %>% 
+      mutate(Model="linearRW(1) with iid effects ")         %>% 
+      rownames_to_column("Variable")
+
+f.m7<-lima.m7$summary.fixed                                 %>% 
+      mutate(Model="linearRW(1) with spatial effects")      %>% 
+      rownames_to_column("Variable")
+
+fix.data<-rbind(f.m3,f.m4,f.m5,f.m6,f.m7)                   %>% 
+          filter(!str_detect(Variable, 'year'))             %>% 
+          filter(!str_detect(Variable, '(Intercept)'))
+
+```
+
+and plot them 
+
+```{r,message=F,fig.width=13,fig.height=6}
+
+
+fix.data                                                                         %>% 
+ggplot(aes(colour=Model))                                                         + 
+geom_linerange(aes(   x    = Variable, 
+                   ymin    = `0.025quant`,
+                   ymax    = `0.975quant`),
+                  position = position_dodge(width = 1/2),
+                        lwd= 1)                                                   +
+geom_pointrange(aes(     x = Variable, 
+                         y = mean,
+                      ymin = `0.025quant`,
+                      ymax = `0.975quant`),
+                  position = position_dodge(width = 1/2), 
+                      lwd = 1/2,shape=21, 
+                     fill = "WHITE")                                              + 
+scale_color_manual(values = c("#f9ebac","#ffd16c","#df861d","#f55e2c","#850503")) + 
+ggtitle("Fixed effects")                                                          +
+geom_hline(yintercept = 0, colour = gray(1/2), lty = 2)                           +
+coord_flip()                                                                      +
+theme_linedraw()
+```
+
+
+
+Our results indicates a negative relationship between the number of deaths and the proportion of people insured  as well as the proportion of people without water service at the district level, while a positive association between our poverty indicator and temperature with the target variable. 
+
+
+
+#  Model accuracy 
+
+## Estimated value 
+
+we can proceed to analyse our  fitted models  in the space .So we access to fitted values with  `InlaObject$$summary.fitted.values$mean`
+
+```{r,message=F,warning=F,fig.width=30,fig.height=20}
+
+
+db.lima.sf<-  lima.shp                                        %>% 
+              inner_join(db.lima.sp                           %>% 
+              ungroup()                                       %>% 
+              mutate(fit =lima.m6$summary.fitted.values$mean,
+                     fit2=lima.m7$summary.fitted.values$mean) %>% 
+              group_by(prov,distr,week,year,month)            %>% 
+              slice(1),
+              c("prov" ="prov",
+                "distr"="distr")) 
+          
+
+
+
+map.true<-db.lima.sf                                    %>% 
+          filter(year==2019 & month == 12)              %>% 
+          ggplot()                                       +
+          geom_sf(aes(fill=n/10))                        +
+          theme_linedraw(base_size = 23)                 +
+          scale_fill_viridis(name="Number of\nactual deaths x10\n(12/2019)",
+                             option="rocket",direction = -1)       
+
+
+map.iid<-db.lima.sf                                    %>% 
+          filter(year==2019 & month ==12)              %>% 
+          ggplot()                                      +
+          geom_sf(aes(fill=fit/10))                     +
+          theme_linedraw(base_size = 23)                +
+          scale_fill_viridis(name="Number of\nfitted deaths x10\n(iid 12/2019)",
+                             option="rocket",
+                             direction = -1)
+
+
+map.fit<-db.lima.sf                                   %>% 
+          filter(year==2019 & month ==12)             %>% 
+          ggplot()                                     +
+          geom_sf(aes(fill=fit2/10))                   +
+          theme_linedraw(base_size = 23)               +
+          scale_fill_viridis(name  ="Number of\nfitted deaths x10\n(spatial 12/2019)",
+                             option="rocket",direction = -1)   
+
+cowplot::plot_grid(map.true,map.iid,map.fit,ncol = 3)
+
+```
+
+
+## Performance metrics 
+
+
+In order to assess the models, we will calculate in-sample performance metrics.First, we collect the fitted values from the INLA object 
+
+
+```{r,message=F,warning=F}
+
+
+fit.m.m3    <- lima.m3$summary.fitted.values$mean
+fit.m.m4    <- lima.m4$summary.fitted.values$mean
+fit.m.m5    <- lima.m5$summary.fitted.values$mean
+fit.m.m6    <- lima.m6$summary.fitted.values$mean
+fit.m.m7    <- lima.m7$summary.fitted.values$mean
+n.lima      <- db.lima.sp$n
+
+datos  <-  list("linear"=fit.m.m3,"linearRW(1)"=fit.m.m4,"AR(1)RW(1)"=fit.m.m5,
+                "iid effects"=fit.m.m6,"spatial effects"=fit.m.m7) %>% 
+           as.data.frame()                                         %>% 
+           gather( key   = "modelo",
+                   value = "fit")                                  %>% 
+           group_by(modelo)                                        %>% 
+           mutate(actual    = n.lima,
+                  date      = db.lima.sp$date,
+                  prov      = db.lima.sp$prov,
+                  distr     = db.lima.sp$distr)
+
+
+```
+
+then to facilitate the calculation of the performance metrics we transform the data to long format and then we use the [`yardstick`](https://yardstick.tidymodels.org/) package to calculate the next metrics  :`mae`,`mape`,`mpe`,`rmse`,`msd`. We can calculate these metrics for all the dataset. 
+
+
+```{r,message=F,warning=F,fig.width=20,fig.height=10}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mase,smape,rmse)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.full <-  datos                    %>% 
+                 group_by(modelo)         %>%
+                 perform.metrics(truth    = actual, 
+                                 estimate = fit)
+
+
+```
+
+And per district 
+
+```{r,message=F,warning=F,fig.width=20,fig.height=10}
+
+#Metrics to use
+perform.metrics <- metric_set(mae,mase,smape,rmse)
+
+# Calculation of metrics in the forecast year
+tbl.yrd.per     <- datos                               %>% 
+                   group_by(modelo,prov,distr)         %>%
+                   perform.metrics(truth    = actual, 
+                                   estimate = fit)
+
+
+```
+
+
+Finally, we use `gt` package to show in a customized table the results 
+
+```{r,message=F,warning=F,eval=F}
+# Results table
+tbl.yrd.full                               %>% 
+pivot_wider(id_cols     = modelo,
+            names_from  = .metric,
+            values_from = .estimate)       %>%         
+gt()                                       %>%
+tab_header(
+    title = md("in-sample accuracy metrics")
+    )
+```
+
+
+```{r,message=F,warning=F,echo=F}
+
+# Results table
+tbl.yrd.full                                                           %>% 
+pivot_wider(id_cols     = modelo,
+            names_from  = .metric,
+            values_from = .estimate)                                   %>%         
+gt()                                                                   %>%
+tab_header(
+    title = md("in-sample accuracy metrics")
+    )                                                                  %>% 
+data_color(
+    columns = vars(mae,mase,smape,rmse),
+    colors = scales::col_numeric(
+      palette = c(
+        "#aa3d01","white"),
+      domain = NULL))                                                  %>% 
+tab_footnote(
+    footnote = "mae = mean absolute error",
+    locations = cells_column_labels(columns = mae))                    %>%  
+tab_footnote(
+    footnote = "mase = Mean absolute scaled error",
+    locations = cells_column_labels(columns = mase))                   %>%  
+tab_footnote(
+    footnote = "smape = Symmetric mean absolute percentage error",
+    locations = cells_column_labels(columns = smape))                  %>%  
+tab_footnote(
+    footnote = "rsme = Root square mean error",
+    locations = cells_column_labels(columns = rmse))
+  
+
+```
+\
+
+And again we can assess this performance spatially, in this case by province . So  for example we can plot the spatial distribution of the **mean absolute error**  for the models spatial effects  correlated and don't correlated
+
+
+```{r,message=F,warning=F,fig.width=25,fig.height=20}
+
+tbl.yrd.per.sf<-lima.shp  %>%  
+                inner_join(tbl.yrd.per,by=c("prov"="prov","distr"="distr"))
+
+
+
+tbl.yrd.per.sf                                                             %>% 
+filter(.metric=="mae" & modelo %in%c("iid.effects","spatial.effects"))     %>% 
+ggplot()                                                                    +
+geom_sf(aes(fill=.estimate),lwd=0.1)                                        +
+scale_fill_distiller(palette="Reds",direction=1,name="MAE")                 +
+facet_wrap(vars(modelo))                                                    +
+theme_linedraw(base_size = 23)                                              +
+theme(strip.text = element_text(face = "bold",size = 30)) 
+
+
+
+```
+
+
+
+
+# Cross-validation 
+
+In orden to obtain more precises results we can calculate `cpo`, this is a cross-validatory criterion for model assessment that is computed for each observation as
+
+\begin{align*}
+CPO = f(y_{i}|y_{-i})
+\end{align*} 
+
+Hence, for each observation its CPO is the posterior probability of observing that observation when the model is fit using all data but  $y_{i}$. This metric per observation tipically is summarized  in only one metrics as :
+
+\begin{align*}
+CPO =-2 \sum_{i}^n log(CPO{i})
+\end{align*} 
+
+
+In order to conduct this calculus we again recollect the cpo information using `model$cpo$cpo`, and we arrange it
+
+```{r,message=F,warning=F}
+
+cpo.m3    <--2*sum(log(lima.m3$cpo$cpo))
+cpo.m4    <--2*sum(log(lima.m4$cpo$cpo))
+cpo.m5    <--2*sum(log(lima.m5$cpo$cpo))
+cpo.m6    <--2*sum(log(lima.m6$cpo$cpo))
+cpo.m7    <--2*sum(log(lima.m7$cpo$cpo))
+
+
+data.cpo  <-  list("linear"=cpo.m3,"linearRW_1"=fit.m.m4,"AR_1_RW_1"=fit.m.m5,
+                "iid_effects"=fit.m.m6,"spatial_effects"=fit.m.m7)               %>% 
+              as.data.frame()                                                    %>% 
+              summarise(linear          =cpo.m3,
+                        linearRW_1      =cpo.m4,
+                        AR_1_RW_1       =cpo.m5,
+                        iid_effects     =cpo.m6,
+                        spatial_effects =cpo.m7)
+```
+
+Finally, we report these results in a  personalized table using `gt`
+
+```{r,message=F,warning=F,eval=F}
+data.cpo                                                                    %>% 
+pivot_longer(cols=colnames(data.cpo),names_to = "model",values_to = "CPO")  %>% 
+gt()                                                                        %>%
+tab_header(
+    title = md("LOO-CV")
+    ) 
+```
+
+
+```{r,message=F,warning=F,echo=F}
+
+data.cpo                                                                    %>% 
+pivot_longer(cols=colnames(data.cpo),names_to = "model",values_to = "CPO")  %>% 
+gt()                                                                        %>% 
+tab_header(
+    title = md("LOO-CV")
+    )                                                                       %>% 
+data_color(
+      columns = vars(CPO),
+      colors = scales::col_numeric(
+      palette = c(
+        "#aa3d01","white"),
+      domain = NULL))
+
+```
+
+\
+
+This indicator has a similar interpretation to the information crtieria indicators like **AIC** in that sense, given the previous table, the best model is the one that considers that the mortality data at the provincial level are spatially correlated.
+
+# Forecasting 
+
+In order to predict the number of deaths in Lima during **2020**  we need information of our covariables and the areas around our interest area . In this section we will focus on Lima district  so only the outcome of **2020** in this district is missing .
+
+```{r,message=F,warning=F}
+
+ db.frcst      <-  readRDS("db_excess_proc_dis_20_m.rds")                          %>% 
+                   inner_join(db.lima.sp %>% select(prov,distr,month,id.sp),
+                              by=c("prov"="prov","distr"="distr","month"="month")) %>% 
+                   distinct(reg,prov,distr,month,n,.keep_all = T)
+
+db.lima.sp.2   <-   db.lima.sp                                                     %>% 
+                   bind_rows(db.frcst)
+
+db.lima.frct   <-  lima.shp                                                        %>%  
+                   inner_join(db.lima.sp.2, by=c("prov"="prov","distr"="distr")) 
+  
+db.lima.frct.geo.off<-db.lima.frct                                                 %>% 
+                      st_drop_geometry()
+  
+
+
+```
+
+
+Then we procced to model our target variable with our best model. INLA internally will forecast the count of death for Lima district .
+
+```{r,warning=F,message=F}
+
+lima.m8   <- inla(n ~ 1 +   year                                 + 
+                            f(week,model="rw1")                  +
+                            f(id.sp, model = "bym", 
+                            graph=W.peru)                        +
+                            temperature  + pp.insured + pp.pover + 
+                            pp.no.elec   + pp.no.water, 
+                   data              = db.lima.frct.geo.off,
+                   control.compute   = list(dic = TRUE, 
+                                            waic = TRUE, 
+                                            cpo = TRUE),
+                   control.predictor = list(link = 1,compute=TRUE)     
+                  )
+
+db.lima.frct.end<-db.lima.frct                                        %>% 
+                  ungroup()                                           %>% 
+                  mutate(fit=lima.m8$summary.fitted.values$mean)      
+
+
+```
+
+and finally in a similar way as above, we assess the forecasted deaths spatially 
+
+```{r,message=F,warning=F,fig.width=25,fig.height=20}
+
+
+
+(map.frct<-db.lima.frct.end                   %>% 
+           filter(year== 2020 & month == 12)  %>% 
+           ggplot()                            +
+           geom_sf(aes(fill=fit))              +
+           theme_linedraw(base_size = 23)      +
+           scale_fill_viridis(name="Number of\nforecasted\ndeaths\n(12/2020)",
+                              direction = -1,option="magma"))  
+
+
+
+```
+
+
+
+
+
+
+
+
