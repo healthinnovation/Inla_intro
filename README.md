@@ -1,6 +1,6 @@
 # Introduction to INLA 
 
-workshop to introduce INLA package in topics like :
+Introductory workshop in Bayesian modeling with INLA package:
 1. Descriptive analysis
 2. Spatio temporal Modelling
 3. Model Accuracy
