@@ -128,7 +128,7 @@ To carry out the adjustment of models using the INLA approach we can use the `in
 
 ```{r,message=F,warning=F,eval=F}
 
-lima.m0 <- inla(n ~ 1 + year,
+lima.m0 <- inla(n ~ 1 + temperature,
                   verbose         = F,
                   data            = db
                )
@@ -145,7 +145,7 @@ The parameters detailed above are the essential ones to execute the adjustment o
 
 ```{r,message=F,warning=F,eval=F}
 
-lima.m1 <- inla(n ~ 1 + year,
+lima.m1 <- inla(n ~ 1 + temperature,
                   verbose           = F,
                   data              = db,
                   family            = "Gaussian",
