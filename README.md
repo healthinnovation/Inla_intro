@@ -3,5 +3,6 @@
 workshop to introduce INLA package in topics like :
 1. Descriptive analysis
 2. Spatio temporal Modelling
-3. Accuracy & validation  with longitudinal data
-4. Forecast
+3. Model Accuracy
+4. Cross-validation
+5. Forecasting
